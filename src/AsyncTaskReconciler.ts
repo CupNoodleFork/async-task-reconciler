@@ -31,7 +31,7 @@ const defaultOpts = Object.freeze({
 
 export class AsyncTaskReconciler {
   private waitingTasks: TaskWrapper[] = [];
-  private workingTaskCount: number;
+  private workingTaskCount: number = 0;
   private finishedTasks: Map<string, TaskWrapper> = new Map();
   private visitedKeyStack: string[]; // 用来排序的栈;
   private opts: Required<AsyncTaskReconcilerOptions> & {
@@ -129,9 +129,9 @@ export class AsyncTaskReconciler {
     }
   }
 
-  private _finallyTaskWorkflow = (key: string) => {
+  private _finallyTaskWorkflow = (key?: string) => {
     this.workingTaskCount--;
-    if (this.opts.cache) {
+    if (key && this.opts.cache) {
       setTimeout(this._clearCache);
       updateStack(this.visitedKeyStack, this.opts.cache.strategy, key);
     }
