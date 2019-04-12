@@ -2,7 +2,7 @@ export interface AsyncTaskReconcilerOptions {
   cache?:
     | boolean
     | {
-        strategy: "FIFO" | "LRU";
+        strategy: 'FIFO' | 'LRU';
         size: number;
       };
   concurrent?: number;
@@ -30,29 +30,26 @@ const defaultOpts = Object.freeze({
 });
 
 export class AsyncTaskReconciler {
-  private waitingTasks: TaskWrapper[] = [];
-  private workingTaskCount: number = 0;
-  private finishedTasks: Map<string, TaskWrapper> = new Map();
-  private visitedKeyStack: string[]; // 用来排序的栈;
+  public waitingTasks: TaskWrapper[] = [];
+  public workingTaskCount: number = 0; // 如果 addTask 没有传 key，不会记录在 workingTaskWrap 中，所以额外开一个字段记录 working 数
+  public workingTaskWrap: Map<string, TaskWrapper> = new Map();
+  public finishedTasks: Map<string, TaskWrapper> = new Map();
+  public visitedKeyStack: string[] = []; // 用来排序的栈;
   private opts: Required<AsyncTaskReconcilerOptions> & {
     cache:
       | {
-          strategy: "FIFO" | "LRU";
+          strategy: 'FIFO' | 'LRU';
           size: number;
         }
       | false;
   };
   constructor(opts: AsyncTaskReconcilerOptions = defaultOpts) {
-    this.opts = { ...defaultOpts, ...(opts || {}) } as any;
+    this.opts = { ...defaultOpts, ...opts } as any;
     if (this.opts.cache === true) {
       this.opts.cache = {
-        strategy: "LRU",
+        strategy: 'LRU',
         size: 10
       };
-    }
-    if (!this.opts.cache) {
-      // 故意触发 .prop 操作报错
-      this.finishedTasks = null as any;
     }
   }
 
@@ -63,67 +60,66 @@ export class AsyncTaskReconciler {
     return taskWrapper.p;
   }
 
+  public clearCache() {
+    this.finishedTasks.clear();
+  }
+
+  public getWorkingCount() {
+    return this.workingTaskCount;
+  }
+
   private _consumeTask() {
     if (
-      this.workingTaskCount < this.opts.concurrent &&
-      this.waitingTasks.length
+      this.workingTaskCount < this.opts.concurrent && // 正在工作的数量小于并发数
+      this.waitingTasks.length // 且等待队列不为空
     ) {
       // 获取接下来要执行的 tasks
       const tasksToRun = this.waitingTasks.splice(
         0,
-        this.opts.concurrent - this.workingTaskCount
+        this.opts.concurrent - this.workingTaskWrap.size
       );
 
       for (let tWrap of tasksToRun) {
         this.workingTaskCount++;
-        if (tWrap.key && this.opts.cache && this.finishedTasks.has(tWrap.key)) {
+        const key = tWrap.key;
+        const finalize = () => this._finallyTaskWorkflow(key);
+        const tWrapResolveCallback = r => {
+          tWrap.status = TaskStatusEnum.resolved;
+          tWrap.resolve(r);
+        };
+        const tWrapRejectCallback = e => {
+          tWrap.status = TaskStatusEnum.rejected;
+          tWrap.error = e;
+          tWrap.reject(e);
+        };
+        if (key && this.opts.cache && this.finishedTasks.has(key)) {
           // 如果命中缓存
-          const cachedWrap = this.finishedTasks.get(tWrap.key);
+          const cachedWrap = this.finishedTasks.get(key);
           tWrap.resolve(cachedWrap.p);
-          this._finallyTaskWorkflow(tWrap.key);
-        } else if (!tWrap.key) {
-          // 没有 key 说明不需要做缓存
+          this._finallyTaskWorkflow(key);
+        } else if (key && this.workingTaskWrap.has(key)) {
+          // 如果命中有正在执行的相同 key 的 task，合并回调
+          const wk = this.workingTaskWrap.get(key);
+          wk.p.then(tWrapResolveCallback, tWrapRejectCallback).then(finalize);
+        } else {
+          // 全新的 task
+          if (key) {
+            // 如果有 key，加入 workingTaskWrap 来去重合并 task
+            this.workingTaskWrap.set(key, tWrap);
+          }
           tWrap
             .task()
-            .then(
-              r => {
-                tWrap.resolve(r);
-              },
-              e => {
-                tWrap.reject(e);
+            .then(r => {
+              // 如果指定了 task 的 key，则进行缓存
+              if (key && this.opts.cache) {
+                this.finishedTasks.set(key, tWrap);
               }
-            )
-            .then(
-              () => {
-                this._finallyTaskWorkflow(tWrap.key);
-              },
-              () => {
-                this._finallyTaskWorkflow(tWrap.key);
+              if (key) {
+                this.workingTaskWrap.delete(key);
               }
-            );
-        } else {
-          tWrap.task().then(
-            r => {
-              tWrap.status = TaskStatusEnum.resolved;
-              if (tWrap.key && this.opts.cache) {
-                this.finishedTasks.set(tWrap.key!, tWrap);
-                const idx = this.visitedKeyStack.indexOf(tWrap.key);
-                if (idx >= 0) {
-                  this.visitedKeyStack.splice(idx, 1);
-                }
-                this.visitedKeyStack.push(tWrap.key); // 放到尾部
-              }
-              this._finallyTaskWorkflow(tWrap.key);
-              tWrap.resolve(r);
-            },
-            e => {
-              tWrap.error = e;
-              tWrap.status = TaskStatusEnum.rejected;
-              tWrap.reject(e);
-              this._finallyTaskWorkflow(tWrap.key);
-              throw e;
-            }
-          );
+              tWrapResolveCallback(r);
+            }, tWrapRejectCallback)
+            .then(finalize);
         }
       }
     }
@@ -132,8 +128,8 @@ export class AsyncTaskReconciler {
   private _finallyTaskWorkflow = (key?: string) => {
     this.workingTaskCount--;
     if (key && this.opts.cache) {
-      setTimeout(this._clearCache);
       updateStack(this.visitedKeyStack, this.opts.cache.strategy, key);
+      setTimeout(this._clearCache.bind(this));
     }
     this._consumeTask();
   };
@@ -151,17 +147,18 @@ export class AsyncTaskReconciler {
       this.finishedTasks.delete(key);
     });
 
+    /* istanbul ignore if */
     if (this.finishedTasks.size !== this.visitedKeyStack.length) {
-      throw new Error("AsyncTaskReconciler: something wrong with cache.");
+      throw new Error('AsyncTaskReconciler: something wrong with cache.');
     }
   }
 }
 
-function updateStack<T>(stack: T[], strategy: "FIFO" | "LRU", key: T) {
+function updateStack<T>(stack: T[], strategy: 'FIFO' | 'LRU', key: T) {
   const idx = stack.indexOf(key);
   if (idx === -1) {
     stack.push(key);
-  } else if (strategy === "LRU") {
+  } else if (strategy === 'LRU') {
     const k = stack.splice(idx, 1)[0];
     stack.push(k);
   }
@@ -182,7 +179,7 @@ function wrapTask<T = any>(
   taskState.p = new Promise<T>((resolve, reject) => {
     taskState.resolve = resolve;
     taskState.reject = reject;
-  })
+  });
 
   return taskState;
 }
