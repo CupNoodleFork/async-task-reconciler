@@ -1,0 +1,19 @@
+env:
+  - CODECOV_TOKEN="aaffe7d5-90ff-45f0-bab7-38af0194ea7b"
+language: node_js
+node_js:
+  - "10"
+sudo: false
+before_script:
+  - npm i -g codecov
+script:
+  - npm test
+branches:
+  only:
+    - master
+cache:
+  yarn: true
+  directories:
+    - "node_modules"
+after_success:
+  - npx codecov
