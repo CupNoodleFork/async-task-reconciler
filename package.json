@@ -2,19 +2,31 @@
   "name": "async-task-reconciler",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "lib/index.js",
+  "module": "es/index.js",
   "scripts": {
     "test": "jest --coverage",
-    "start": "jest --watch"
+    "start": "jest --watch",
+    "build:es": "rimraf es&&tsc --target es2017 --module es2015 --outDir es",
+    "build:lib": "rimraf lib&&tsc --target es5 --module commonjs --outDir lib",
+    "build": "npm run build:es&&npm run build:lib",
+    "prepublish": "npm run build"
   },
+  "files": [
+    "README.md",
+    "es/",
+    "lib/"
+  ],
+  "sideEffect": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@types/jest": "^24.0.11",
     "@types/node": "^11.13.4",
     "jest": "^24.7.1",
+    "rimraf": "^2.6.3",
     "ts-jest": "^24.0.2",
-    "typescript": "^3.4.3"
+    "typescript": ">=3"
   },
   "dependencies": {
     "tslib": "^1.9.3"
